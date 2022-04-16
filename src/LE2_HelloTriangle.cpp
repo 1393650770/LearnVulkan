@@ -54,8 +54,11 @@ void LE2_HelloTriangle::initWindow()
 	//禁用窗口可调整大小
 	glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 	//创建实际的窗口
-	window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
-
+	window = glfwCreateWindow(WIDTH, HEIGHT, "LearnVulkan", nullptr, nullptr);
+	//设置窗口的用户指针。
+	glfwSetWindowUserPointer(window, this);
+	//设置指定窗口的framebuffer调整大小回调函数。
+	glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
 }
 
 void LE2_HelloTriangle::initVulkan() {
@@ -70,7 +73,7 @@ void LE2_HelloTriangle::initVulkan() {
 	createGraphicsPipeline();
 	createFramebuffers();
 	createCommandPool();
-	createCommandBuffer();
+	createCommandBuffers();
 	createSyncObjects();
 }
 
@@ -89,31 +92,16 @@ void LE2_HelloTriangle::mainLoop()
 
 void LE2_HelloTriangle::cleanup()
 {
-	//销毁信号量
-	vkDestroySemaphore(device, imageAvailableSemaphores, nullptr);
-	vkDestroySemaphore(device, renderFinishedSemaphores, nullptr);
-	//销毁Fence
-	vkDestroyFence(device, inFlightFence, nullptr);
+	cleanupSwapChain();
+	//销毁信号量和Fence
+	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+		vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
+		vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
+		vkDestroyFence(device, inFlightFences[i], nullptr);
+	}
 	//销毁命令池
 	vkDestroyCommandPool(device, commandPool, nullptr);
-	//销毁帧缓冲区
-	for (auto framebuffer : swapChainFramebuffers) {
-		vkDestroyFramebuffer(device, framebuffer, nullptr);
-	}
-	//清除管线
-	vkDestroyPipeline(device, graphicsPipeline, nullptr);
-	//清除管线布局
-	vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
-	//清楚渲染pass
-	vkDestroyRenderPass(device, renderPass, nullptr);
 
-	//销毁图像视图
-	for (auto imageView : swapChainImageViews) 
-	{
-		vkDestroyImageView(device, imageView, nullptr);
-	}
-	//销毁交换链
-	vkDestroySwapchainKHR(device, swapChain, nullptr);
 	//销毁逻辑设备
 	vkDestroyDevice(device, nullptr);
 	//如果开启了调试就销毁debugMessenger
@@ -130,30 +118,84 @@ void LE2_HelloTriangle::cleanup()
 	glfwTerminate();
 }
 
+void LE2_HelloTriangle::cleanupSwapChain()
+{
+	//销毁帧缓冲区
+	for (auto framebuffer : swapChainFramebuffers) {
+		vkDestroyFramebuffer(device, framebuffer, nullptr);
+	}
+	//清除管线
+	vkDestroyPipeline(device, graphicsPipeline, nullptr);
+	//清除管线布局
+	vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+	//清楚渲染pass
+	vkDestroyRenderPass(device, renderPass, nullptr);
+
+	//销毁图像视图
+	for (auto imageView : swapChainImageViews)
+	{
+		vkDestroyImageView(device, imageView, nullptr);
+	}
+	//销毁交换链
+	vkDestroySwapchainKHR(device, swapChain, nullptr);
+}
+
+void LE2_HelloTriangle::recreateSwapChain()
+{
+	int width = 0, height = 0;
+	glfwGetFramebufferSize(window, &width, &height);
+	//如果长宽为0，会不断循环，直到拉大
+	while (width == 0 || height == 0) {
+		glfwGetFramebufferSize(window, &width, &height);
+		glfwWaitEvents();
+	}
+
+	vkDeviceWaitIdle(device);
+
+	createSwapChain();
+	createImageViews();
+	createRenderPass();
+	createGraphicsPipeline();
+	createFramebuffers();
+}
+
 void LE2_HelloTriangle::drawFrame()
 {
 	//等待上一帧结束
-	vkWaitForFences(device, 1, &inFlightFence, VK_TRUE, UINT64_MAX);
-	//将栅栏重置为无信号状态vkResetFences
-	vkResetFences(device, 1, &inFlightFence);
-
+	vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+	
 	//从交换链中获取图像
 	uint32_t imageIndex;
 	//前两个参数是我们希望从中获取图像的逻辑设备和交换链
 	//第三个参数指定图像可用的超时时间（以纳秒为单位）
 	//使用 64 位无符号整数的最大值意味着我们有效地禁用了超时。
-	vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphores, VK_NULL_HANDLE, &imageIndex);
+	VkResult result = vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+
+	//VK_ERROR_OUT_OF_DATE_KHR：交换链与表面不兼容，不能再用于渲染。通常发生在窗口调整大小之后。
+	if (result == VK_ERROR_OUT_OF_DATE_KHR) 
+	{
+		recreateSwapChain();
+		return;
+	}
+	//VK_SUBOPTIMAL_KHR：交换链仍然可以用来成功呈现到表面，但表面属性不再完全匹配。
+	else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) 
+	{
+		throw std::runtime_error("failed to acquire swap chain image!");
+	}
+
+	//将栅栏重置为无信号状态vkResetFences
+	vkResetFences(device, 1, &inFlightFences[currentFrame]);
 
 	//重置命令缓冲区，保证能够记录命令缓冲区
-	vkResetCommandBuffer(commandBuffer, /*VkCommandBufferResetFlagBits*/ 0);
+	vkResetCommandBuffer(commandBuffers[currentFrame], /*VkCommandBufferResetFlagBits*/ 0);
 	
 	//记录我们想要的命令
-	recordCommandBuffer(commandBuffer, imageIndex);
+	recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
 
 	VkSubmitInfo submitInfo{};
 	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 	//设置等待的信号量
-	VkSemaphore waitSemaphores[] = { imageAvailableSemaphores };
+	VkSemaphore waitSemaphores[] = { imageAvailableSemaphores[currentFrame] };
 	//设置等待的阶段
 	VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
 	//设置到info中
@@ -163,15 +205,15 @@ void LE2_HelloTriangle::drawFrame()
 
 	//设置提交到的命令缓冲区
 	submitInfo.commandBufferCount = 1;
-	submitInfo.pCommandBuffers = &commandBuffer;
+	submitInfo.pCommandBuffers = &commandBuffers[currentFrame];
 
 	//设置命令缓冲区完成执行后发出信号的信号量
-	VkSemaphore signalSemaphores[] = { renderFinishedSemaphores };
+	VkSemaphore signalSemaphores[] = { renderFinishedSemaphores[currentFrame] };
 	submitInfo.signalSemaphoreCount = 1;
 	submitInfo.pSignalSemaphores = signalSemaphores;
 
 	// 将命令缓冲区提交到图形队列
-	if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFence) != VK_SUCCESS) {
+	if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]) != VK_SUCCESS) {
 		throw std::runtime_error("failed to submit draw command buffer!");
 	}
 
@@ -192,7 +234,18 @@ void LE2_HelloTriangle::drawFrame()
 	//presentInfo.pResults = nullptr; // Optional
 	
 	//将显示信息提交到显示队列
-	vkQueuePresentKHR(presentQueue, &presentInfo);
+	result = vkQueuePresentKHR(presentQueue, &presentInfo);
+
+	if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
+		framebufferResized = false;
+		recreateSwapChain();
+	}
+	else if (result != VK_SUCCESS) {
+		throw std::runtime_error("failed to present swap chain image!");
+	}
+
+
+	currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
 void LE2_HelloTriangle::createInstance()
@@ -1047,8 +1100,9 @@ void LE2_HelloTriangle::createCommandPool()
 	}
 }
 
-void LE2_HelloTriangle::createCommandBuffer()
+void LE2_HelloTriangle::createCommandBuffers()
 {
+	commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
 	//命令缓冲区分配info
 	VkCommandBufferAllocateInfo allocInfo{};
 	allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -1060,10 +1114,10 @@ void LE2_HelloTriangle::createCommandBuffer()
 	allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 
 	//命令缓冲区数量
-	allocInfo.commandBufferCount = 1;
+	allocInfo.commandBufferCount = (uint32_t)commandBuffers.size();
 
 	//创建命令缓冲区
-	if (vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer) != VK_SUCCESS) {
+	if (vkAllocateCommandBuffers(device, &allocInfo, commandBuffers.data()) != VK_SUCCESS) {
 		throw std::runtime_error("failed to allocate command buffers!");
 	}
 }
@@ -1129,6 +1183,10 @@ void LE2_HelloTriangle::recordCommandBuffer(VkCommandBuffer commandBuffer, uint3
 
 void LE2_HelloTriangle::createSyncObjects()
 {
+	imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+	renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+	inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
+
 	VkSemaphoreCreateInfo semaphoreInfo{};
 	semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 
@@ -1137,10 +1195,15 @@ void LE2_HelloTriangle::createSyncObjects()
 	//信号状态下创建栅栏，以便第一次调用 vkWaitForFences()立即返回，因为栅栏已经发出信号。
 	fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
-	if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailableSemaphores) != VK_SUCCESS ||
-		vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphores) != VK_SUCCESS ||
-		vkCreateFence(device, &fenceInfo, nullptr, &inFlightFence) != VK_SUCCESS) {
-		throw std::runtime_error("failed to create synchronization objects for a frame!");
+	//创建信号量和Fence
+	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) 
+	{
+		if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailableSemaphores[i]) != VK_SUCCESS ||
+			vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS ||
+			vkCreateFence(device, &fenceInfo, nullptr, &inFlightFences[i]) != VK_SUCCESS) 
+		{
+			throw std::runtime_error("failed to create synchronization objects for a frame!");
+		}
 	}
 
 }

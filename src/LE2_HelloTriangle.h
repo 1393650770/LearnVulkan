@@ -11,7 +11,7 @@
 const uint32_t WIDTH = 800;
 const uint32_t HEIGHT = 600;
 
-const int MAX_FRAMES_IN_FLIGHT = 2;
+const int MAX_FRAMES_IN_FLIGHT = 3;
 
 const std::vector<const char*> validationLayers = {
     "VK_LAYER_KHRONOS_validation"
@@ -88,20 +88,24 @@ private:
     //命令池，管理用于存储缓冲区的内存，并从中分配命令缓冲区
     VkCommandPool commandPool;
     //命令缓冲区
-    VkCommandBuffer commandBuffer;
+    std::vector<VkCommandBuffer> commandBuffers;
 
     //信号量对象
-    VkSemaphore imageAvailableSemaphores;
+    std::vector<VkSemaphore> imageAvailableSemaphores;
+    std::vector<VkSemaphore> renderFinishedSemaphores;
 
-    VkSemaphore renderFinishedSemaphores;
     //Fence对象
-    VkFence inFlightFence;
+    std::vector<VkFence> inFlightFences;
 
+    //当前的帧数。我们使用三重缓冲
+    uint32_t currentFrame = 0;
+    //重建framebuffer
+    bool framebufferResized = false;
     void initWindow();
     void initVulkan();
     void mainLoop();
     void cleanup();
-
+    void drawFrame();
 
     //创建Vulkan实例
     void createInstance();
@@ -158,14 +162,24 @@ private:
     //创建命令池
     void createCommandPool();
     //创建命令缓冲区
-    void createCommandBuffer();
+    void createCommandBuffers();
     //记录命令，写入命令缓冲区
     void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
 
     //创建同步对象
     void createSyncObjects();
 
-    void drawFrame();
+    //清除交换链
+    void cleanupSwapChain();
+    //重新创建交换链
+    void recreateSwapChain();
+
+    //重建framebuffer时候调用的回调
+    static void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
+        auto app = reinterpret_cast<LE2_HelloTriangle*>(glfwGetWindowUserPointer(window));
+        app->framebufferResized = true;
+    }
+
 public:
     void run();
 };
@@ -192,4 +206,5 @@ static std::vector<char> readFile(const std::string& filename)
 
     return buffer;
 }
+
 
