@@ -14,7 +14,26 @@
 
 #include <iostream>
 
+#include "LE2_HelloTriangle.h"
+
+void hello_vulkan();
+
 int main() 
+{
+    LE2_HelloTriangle hello_triangle;
+
+    try {
+        hello_triangle.run();
+    }
+    catch (const std::exception& e) {
+        std::cerr << e.what() << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    return 0;
+}
+
+void hello_vulkan()
 {
     glfwInit();
 
@@ -38,5 +57,5 @@ int main()
 
     glfwTerminate();
 
-    return 0;
+    return ;
 }

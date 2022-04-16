@@ -9,6 +9,11 @@ project(LearnVulkan)
 
 set(EXECUTABLE_SOURCES
     src/main.cpp
+    src/LE2_HelloTriangle.cpp
+)
+
+set(LearnVulkan_LIBRARY_LIB_SOURCES
+
 )
 
 include(CheckCXXCompilerFlag)
@@ -29,7 +34,10 @@ else()
     message(STATUS "The compiler ${CMAKE_CXX_COMPILER} has no C++17 support. Please use a different C++ compiler.")
 endif()
 
+
+
 add_executable(LearnVulkan  ${EXECUTABLE_SOURCES})
+
 
 target_link_libraries(LearnVulkan PRIVATE glfw)
 target_link_libraries(LearnVulkan PRIVATE glm::glm)
